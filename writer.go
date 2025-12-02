@@ -341,6 +341,14 @@ func (w *Writer) Close() error {
 	return nil
 }
 
+func (w *Writer) PageIndex() ([]byte, error) {
+	return w.writer.pageIndex()
+}
+
+func (w *Writer) Footer() ([]byte, error) {
+	return w.writer.footer()
+}
+
 // Flush flushes all buffers into a row group to the underlying io.Writer.
 //
 // Flush is called automatically on Close, it is only useful to call explicitly
@@ -884,7 +892,7 @@ func (w *writer) writeFileHeader() error {
 	return nil
 }
 
-func (w *writer) writeFileFooter() error {
+func (w *writer) pageIndex() ([]byte, error) {
 	// The page index is composed of two sections: column and offset indexes.
 	// They are written after the row groups, right before the footer (which
 	// is written by the parent Writer.Close call).
@@ -898,17 +906,21 @@ func (w *writer) writeFileFooter() error {
 	// readers will simply ignore this section since they do not know how to
 	// decode its content, nor have loaded any metadata to reference it.
 	protocol := new(thrift.CompactProtocol)
-	encoder := thrift.NewEncoder(protocol.NewWriter(&w.fileWriter))
+
+	offsetDelta := w.fileWriter.offset
+
+	pageIndexBuffer := bytes.NewBuffer(make([]byte, 0, 1024))
+	encoder := thrift.NewEncoder(protocol.NewWriter(pageIndexBuffer))
 
 	for i, columnIndexes := range w.columnIndexes {
 		rowGroup := &w.rowGroups[i]
 		for j := range columnIndexes {
 			column := &rowGroup.Columns[j]
-			column.ColumnIndexOffset = w.fileWriter.offset
+			column.ColumnIndexOffset = offsetDelta + int64(pageIndexBuffer.Len())
 			if err := encoder.Encode(&columnIndexes[j]); err != nil {
-				return err
+				return nil, err
 			}
-			column.ColumnIndexLength = int32(w.fileWriter.offset - column.ColumnIndexOffset)
+			column.ColumnIndexLength = int32(offsetDelta + int64(pageIndexBuffer.Len()) - column.ColumnIndexOffset)
 		}
 	}
 
@@ -916,14 +928,18 @@ func (w *writer) writeFileFooter() error {
 		rowGroup := &w.rowGroups[i]
 		for j := range offsetIndexes {
 			column := &rowGroup.Columns[j]
-			column.OffsetIndexOffset = w.fileWriter.offset
+			column.OffsetIndexOffset = offsetDelta + int64(pageIndexBuffer.Len())
 			if err := encoder.Encode(&offsetIndexes[j]); err != nil {
-				return err
+				return nil, err
 			}
-			column.OffsetIndexLength = int32(w.fileWriter.offset - column.OffsetIndexOffset)
+			column.OffsetIndexLength = int32(offsetDelta + int64(pageIndexBuffer.Len()) - column.OffsetIndexOffset)
 		}
 	}
 
+	return pageIndexBuffer.Bytes(), nil
+}
+
+func (w *writer) footer() ([]byte, error) {
 	numRows := int64(0)
 	for rowGroupIndex := range w.rowGroups {
 		numRows += w.rowGroups[rowGroupIndex].NumRows
@@ -939,13 +955,34 @@ func (w *writer) writeFileFooter() error {
 		ColumnOrders:     w.columnOrders,
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	length := len(footer)
 	footer = append(footer, 0, 0, 0, 0)
 	footer = append(footer, "PAR1"...)
 	binary.LittleEndian.PutUint32(footer[length:], uint32(length))
+
+	return footer, nil
+}
+
+func (w *writer) writeFileFooter() error {
+	// Write the page index before the footer which will modify the footer offset values.
+	pageIndex, err := w.pageIndex()
+	if err != nil {
+		return err
+	}
+
+	_, err = w.fileWriter.Write(pageIndex)
+	if err != nil {
+		return err
+	}
+
+	// Write the file footer
+	footer, err := w.footer()
+	if err != nil {
+		return err
+	}
 
 	_, err = w.fileWriter.Write(footer)
 	return err
