@@ -2,6 +2,7 @@ package parquet
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -1673,11 +1674,24 @@ func (col *plainByteArrayColumnBuffer) WriteValues(values []Value) (int, error) 
 }
 
 func (col *plainByteArrayColumnBuffer) writeValues(rows sparse.Array, _ columnLevels) {
-	panic("not supported")
+	for i := 0; i < rows.Len(); i++ {
+		p := rows.Index(i)
+		col.append(*(*string)(p))
+	}
 }
 
 func (col *plainByteArrayColumnBuffer) ReadValuesAt(values []Value, offset int64) (n int, err error) {
 	panic("not supported")
+}
+
+func (col *plainByteArrayColumnBuffer) append(value string) {
+	valueLen := len(value)
+	plainEncoded := make([]byte, 4+valueLen)
+	binary.LittleEndian.PutUint32(plainEncoded[0:4], uint32(valueLen))
+	copy(plainEncoded[4:], value)
+	col.offsets = append(col.offsets, uint32(len(col.values))+4)
+	col.lengths = append(col.lengths, uint32(valueLen))
+	col.values = append(col.values, plainEncoded...)
 }
 
 func (col *plainByteArrayColumnBuffer) appendPlainBytes(value []byte) {
