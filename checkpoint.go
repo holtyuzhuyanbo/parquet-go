@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"time"
 
 	"github.com/parquet-go/parquet-go/format"
 )
@@ -77,6 +78,7 @@ func (w *CheckpointableWriter) Checkpoint() error {
 		ColumnIndexes:  make([][]format.ColumnIndex, len(w.writer.columnIndexes)),
 		OffsetIndexes:  make([][]format.OffsetIndex, len(w.writer.offsetIndexes)),
 		CurrentOffset:  w.writer.fileWriter.offset,
+		CreatedAt:      time.Now(),
 	}
 
 	copy(checkpoint.Metadata, w.writer.metadata)
@@ -112,6 +114,8 @@ type WriterCheckpoint struct {
 	OffsetIndexes [][]format.OffsetIndex
 
 	CurrentOffset int64
+
+	CreatedAt time.Time
 }
 
 func (cp *WriterCheckpoint) Save(path string) error {
