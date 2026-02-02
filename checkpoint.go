@@ -32,6 +32,9 @@ func RecoverFromCheckpoint(dataPath, checkpointPath string, options ...WriterOpt
 	writer := NewCheckpointableWriter(dataFile, checkpointPath, options...)
 	writer.writer.createdBy = checkpoint.CreatedBy
 	writer.writer.metadata = checkpoint.Metadata
+	if writer.writer.metadata == nil {
+		writer.writer.metadata = make([]format.KeyValue, 0)
+	}
 	writer.writer.columnOrders = checkpoint.ColumnOrders
 	writer.writer.schemaElements = checkpoint.SchemaElements
 	writer.writer.sortingColumns = checkpoint.SortingColumns
